@@ -92,6 +92,9 @@ textarea { min-height: 160px; resize: vertical; }
 .svg-page svg { max-width: 100%; height: auto; display: block; margin: 0 auto; }
 .error { border-color: rgba(231,130,132,.45); color: #ffd4d5; }
 .source { white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+.card-render { background: rgba(35,38,52,.38); border: 1px solid rgba(198,208,245,.1); border-radius: 8px; padding: 10px; overflow: auto; -webkit-overflow-scrolling: touch; }
+.card-render .svg-page { padding: 0; background: transparent; }
+.card-render svg { max-width: 100%; height: auto; display: block; }
 .ratings { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 .again { background: var(--red); color: var(--crust); font-weight: 800; }
 .hard { background: var(--peach); color: var(--crust); font-weight: 800; }
@@ -140,6 +143,7 @@ textarea { min-height: 160px; resize: vertical; }
   .pill { max-width: 100%; overflow-wrap: anywhere; }
   .svg-page { max-height: 68dvh; padding: 10px; }
   .source { font-size: 12px; line-height: 1.45; }
+  .card-render { padding: 8px; }
   .graph { min-height: 420px; }
   .node-list { grid-template-columns: 1fr; }
   .ratings { grid-template-columns: 1fr 1fr; }
@@ -564,10 +568,10 @@ fn SrsView(mut project: Signal<Project>, mut srs: Signal<SrsSession>) -> Element
                             span { class: "pill", "{card.source_path}" }
                         }
                         div { class: "file-name", "Question" }
-                        div { class: "source", "{card.question}" }
+                        TypstCardContent { project: current_project.clone(), card: card.clone(), side: CardSide::Question }
                         if current_session.showing_answer {
                             div { class: "file-name", "Answer" }
-                            div { class: "source", "{card.answer}" }
+                            TypstCardContent { project: current_project.clone(), card: card.clone(), side: CardSide::Answer }
                         }
                     }
                     if current_session.showing_answer {
@@ -598,6 +602,47 @@ fn SrsView(mut project: Signal<Project>, mut srs: Signal<SrsSession>) -> Element
                 }
             }
         }
+    }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum CardSide {
+    Question,
+    Answer,
+}
+
+impl CardSide {
+    fn label(self) -> &'static str {
+        match self {
+            CardSide::Question => "question",
+            CardSide::Answer => "answer",
+        }
+    }
+
+    fn source(self, card: &Flashcard) -> &str {
+        match self {
+            CardSide::Question => &card.question,
+            CardSide::Answer => &card.answer,
+        }
+    }
+}
+
+#[component]
+fn TypstCardContent(project: Project, card: Flashcard, side: CardSide) -> Element {
+    let file = card_typst_file(&card, side);
+    match cached_render_typst_svg(&project, &file) {
+        Ok(svg) => rsx! {
+            div { class: "card-render",
+                div { class: "svg-page", dangerous_inner_html: "{svg}" }
+            }
+        },
+        Err(err) => rsx! {
+            div { class: "panel error stack",
+                div { class: "file-name", "Render diagnostic" }
+                div { class: "source", "{err}" }
+                div { class: "source", "{side.source(&card)}" }
+            }
+        },
     }
 }
 
@@ -1753,6 +1798,32 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
         .map_err(|err| err.to_string())
 }
 
+fn card_typst_file(card: &Flashcard, side: CardSide) -> TypstFile {
+    let path = card_typst_path(card, side);
+    let source = format!(
+        "#set page(width: 360pt, height: auto, margin: 10pt)\n#set text(size: 12pt)\n{}",
+        side.source(card)
+    );
+    TypstFile {
+        path,
+        deck: card.deck.clone(),
+        source,
+    }
+}
+
+fn card_typst_path(card: &Flashcard, side: CardSide) -> String {
+    let directory = Path::new(&card.source_path)
+        .parent()
+        .and_then(|path| normalize_relative_path(path))
+        .unwrap_or_default();
+    let name = format!(".typst-web-card-{}-{}.typ", card.id, side.label());
+    if directory.is_empty() {
+        name
+    } else {
+        format!("{directory}/{name}")
+    }
+}
+
 fn render_typst_svg(project: &Project, file: &TypstFile) -> Result<String, String> {
     use typst::layout::PagedDocument;
     use typst::syntax::{
@@ -1777,6 +1848,7 @@ fn render_typst_svg(project: &Project, file: &TypstFile) -> Result<String, Strin
             }
         }
     }
+    source_paths.insert(file.path.clone(), file.source.clone());
     let mut sources: Vec<(FileId, String)> = source_paths
         .into_iter()
         .map(|(path, source)| (FileId::new(None, VirtualPath::new(&path)), source))
@@ -2057,6 +2129,22 @@ entrypoint = "src/lib.typ"
         let file = project.files.first().expect("main file");
 
         render_typst_svg(&project, file).expect("transitive package render should compile");
+    }
+
+    #[test]
+    fn render_card_typst_file_compiles_markup() {
+        let project = Project::sample();
+        let card = Flashcard {
+            id: "card".to_string(),
+            deck: "root".to_string(),
+            source_path: "index.typ".to_string(),
+            question: "#strong[What is $x^2$?]".to_string(),
+            answer: "A #emph[Typst] expression.".to_string(),
+        };
+        let file = card_typst_file(&card, CardSide::Question);
+
+        let svg = render_typst_svg(&project, &file).expect("card markup should render");
+        assert!(svg.contains("<svg"));
     }
 
     fn test_package_file(name: &str, path: &str, source: &str) -> TypstPackageFile {
