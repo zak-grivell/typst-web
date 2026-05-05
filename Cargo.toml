@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-dioxus = { version = "=0.7.5", default-features = false, features = ["launch", "macro", "html", "signals", "hooks", "logger"] }
+dioxus = { version = "=0.7.5", default-features = false, features = ["launch", "macro", "html", "signals", "hooks"] }
 base64 = "0.22.1"
 regex = "1.12.2"
 serde = { version = "1.0.228", features = ["derive"] }
@@ -22,13 +22,19 @@ tokio = { version = "1.52.2", features = ["rt"] }
 typst-as-lib = { version = "0.15.4", features = ["packages", "typst-kit-fonts", "ureq"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-console_error_panic_hook = "0.1.7"
 gloo-net = "0.6.0"
 js-sys = "0.3.83"
-typst-as-lib = { version = "0.15.4", features = ["typst-kit-embed-fonts", "typst-kit-fonts"] }
+typst-as-lib = { version = "0.15.4" }
 
 [features]
 default = ["desktop"]
 web = ["dioxus/web"]
 desktop = ["dioxus/desktop"]
 mobile = ["dioxus/mobile"]
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "z"
+panic = "abort"
+strip = true

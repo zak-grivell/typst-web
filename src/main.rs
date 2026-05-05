@@ -8,6 +8,14 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::path::{Component, Path};
 
+#[cfg(target_arch = "wasm32")]
+const WEB_FONTS: &[&[u8]] = &[
+    include_bytes!("../assets/fonts/LibertinusSerif-Regular.otf"),
+    include_bytes!("../assets/fonts/LibertinusSerif-Bold.otf"),
+    include_bytes!("../assets/fonts/LibertinusSerif-Italic.otf"),
+    include_bytes!("../assets/fonts/NewCMMath-Regular.otf"),
+];
+
 const CSS: &str = r#"
 :root {
   color-scheme: dark;
@@ -160,6 +168,8 @@ textarea { min-height: 160px; resize: vertical; }
 
 thread_local! {
     static RENDER_CACHE: RefCell<BTreeMap<String, Result<String, String>>> = RefCell::new(BTreeMap::new());
+    #[cfg(target_arch = "wasm32")]
+    static WEB_FONT_CACHE: RefCell<Option<Vec<typst::text::Font>>> = const { RefCell::new(None) };
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -253,15 +263,12 @@ struct Project {
 }
 
 fn main() {
-    #[cfg(target_arch = "wasm32")]
-    console_error_panic_hook::set_once();
-
     dioxus::launch(App);
 }
 
 #[component]
 fn App() -> Element {
-    let mut mode = use_signal(|| Mode::Preview);
+    let mut mode = use_signal(|| Mode::Files);
     let project = use_signal(Project::sample);
     let mut active_file = use_signal(|| project.read().active_file.clone());
     let mut query = use_signal(String::new);
@@ -1824,6 +1831,23 @@ fn card_typst_path(card: &Flashcard, side: CardSide) -> String {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+fn web_fonts() -> Vec<typst::text::Font> {
+    WEB_FONT_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        cache
+            .get_or_insert_with(|| {
+                WEB_FONTS
+                    .iter()
+                    .flat_map(|bytes| {
+                        typst::text::Font::iter(typst::foundations::Bytes::new(*bytes))
+                    })
+                    .collect()
+            })
+            .clone()
+    })
+}
+
 fn render_typst_svg(project: &Project, file: &TypstFile) -> Result<String, String> {
     use typst::layout::PagedDocument;
     use typst::syntax::{
@@ -1904,9 +1928,12 @@ fn render_typst_svg(project: &Project, file: &TypstFile) -> Result<String, Strin
     let builder = builder
         .with_file_system_resolver(".")
         .with_package_file_resolver();
-    let engine = builder
-        .search_fonts_with(typst_as_lib::typst_kit_options::TypstKitFontOptions::default())
-        .build();
+    #[cfg(target_arch = "wasm32")]
+    let builder = builder.fonts(web_fonts());
+    #[cfg(not(target_arch = "wasm32"))]
+    let builder =
+        builder.search_fonts_with(typst_as_lib::typst_kit_options::TypstKitFontOptions::default());
+    let engine = builder.build();
     let warned = engine.compile::<_, PagedDocument>(file.path.as_str());
     match warned.output {
         Ok(document) => Ok(typst_svg::svg_merged(
