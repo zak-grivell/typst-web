@@ -6602,6 +6602,7 @@ dependencies = [
  "typst",
  "typst-as-lib",
  "typst-svg",
+ "web-sys",
 ]
 
 [[package]]

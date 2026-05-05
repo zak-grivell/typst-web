@@ -262,6 +262,13 @@ struct Project {
     message: String,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+struct SavedGitHubRepo {
+    repo: String,
+    git_ref: String,
+    token: String,
+}
+
 fn main() {
     dioxus::launch(App);
 }
@@ -366,6 +373,9 @@ fn SourcePanel(
     mut project: Signal<Project>,
     mut active_file: Signal<Option<String>>,
 ) -> Element {
+    let mut saved_github_repos = use_signal(load_saved_github_repos);
+    let saved = saved_github_repos.read().clone();
+
     rsx! {
         div { class: "panel stack source-panel",
             div { class: "file-name", "Workspace" }
@@ -380,6 +390,24 @@ fn SourcePanel(
                 },
                 "Load Local"
             }
+            if !saved.is_empty() {
+                select {
+                    value: "",
+                    onchange: move |event| {
+                        if let Ok(index) = event.value().parse::<usize>() {
+                            if let Some(entry) = saved_github_repos.read().get(index).cloned() {
+                                github_repo.set(entry.repo);
+                                github_ref.set(entry.git_ref);
+                                github_token.set(entry.token);
+                            }
+                        }
+                    },
+                    option { value: "", "Saved GitHub repos" }
+                    for (index, entry) in saved.iter().enumerate() {
+                        option { value: "{index}", "{entry.repo} @ {entry.git_ref}" }
+                    }
+                }
+            }
             input {
                 value: "{github_repo}",
                 placeholder: "GitHub owner/repo",
@@ -391,16 +419,23 @@ fn SourcePanel(
                 oninput: move |event| github_ref.set(event.value())
             }
             input {
+                r#type: "password",
                 value: "{github_token}",
                 placeholder: "token for private repo",
                 oninput: move |event| github_token.set(event.value())
             }
             button {
                 onclick: move |_| {
+                    let repo = github_repo.read().to_string();
+                    let git_ref = github_ref.read().to_string();
+                    let token = github_token.read().to_string();
+                    if let Some(next) = remember_github_repo(repo.clone(), git_ref.clone(), token.clone()) {
+                        saved_github_repos.set(next);
+                    }
                     start_github_load(
-                        github_repo.read().to_string(),
-                        github_ref.read().to_string(),
-                        github_token.read().to_string(),
+                        repo,
+                        git_ref,
+                        token,
                         project,
                         active_file,
                     );
@@ -410,6 +445,68 @@ fn SourcePanel(
             div { class: "muted", "{project.read().message}" }
         }
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+const SAVED_GITHUB_REPOS_KEY: &str = "typst-web:saved-github-repos";
+
+fn load_saved_github_repos() -> Vec<SavedGitHubRepo> {
+    load_saved_github_repos_impl().unwrap_or_default()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn load_saved_github_repos_impl() -> Option<Vec<SavedGitHubRepo>> {
+    let raw = browser_storage()?.get_item(SAVED_GITHUB_REPOS_KEY).ok()??;
+    serde_json::from_str(&raw).ok()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn load_saved_github_repos_impl() -> Option<Vec<SavedGitHubRepo>> {
+    None
+}
+
+fn remember_github_repo(
+    repo: String,
+    git_ref: String,
+    token: String,
+) -> Option<Vec<SavedGitHubRepo>> {
+    let repo = repo.trim().to_string();
+    let git_ref = git_ref.trim().to_string();
+    if repo.is_empty() {
+        return None;
+    }
+
+    let mut saved = load_saved_github_repos();
+    saved.retain(|entry| entry.repo != repo || entry.git_ref != git_ref);
+    saved.insert(
+        0,
+        SavedGitHubRepo {
+            repo,
+            git_ref,
+            token,
+        },
+    );
+    saved.truncate(12);
+    persist_saved_github_repos(&saved);
+    Some(saved)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn persist_saved_github_repos(saved: &[SavedGitHubRepo]) {
+    let Some(storage) = browser_storage() else {
+        return;
+    };
+    if let Ok(raw) = serde_json::to_string(saved) {
+        let _ = storage.set_item(SAVED_GITHUB_REPOS_KEY, &raw);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn persist_saved_github_repos(_saved: &[SavedGitHubRepo]) {}
+
+#[cfg(target_arch = "wasm32")]
+fn browser_storage() -> Option<web_sys::Storage> {
+    web_sys::window()?.local_storage().ok().flatten()
 }
 
 #[component]
