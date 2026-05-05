@@ -1,0 +1,6 @@
+[application]
+name = "typst-web"
+out_dir = "docs"
+
+[web.app]
+base_path = "typst-web"
